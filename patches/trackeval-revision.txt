@@ -1,0 +1,4 @@
+﻿Repository: https://github.com/JonathonLuiten/TrackEval
+Base commit: 12c8791
+Local changes: patches/trackeval-12c8791-compat.patch
+Patch must be applied from: external/TrackEval
