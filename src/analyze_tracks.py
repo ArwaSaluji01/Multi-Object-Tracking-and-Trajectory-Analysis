@@ -1,28 +1,75 @@
-
 from pathlib import Path
 
-import pandas as pd
 import cv2
+import numpy as np
+import pandas as pd
+
+from io_validation import read_validated_csv, require_nonempty_file, write_csv_atomic
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INPUT_CSV = ROOT / "outputs" / "trajectories" / "tracks.csv"
 OUTPUT_CSV = ROOT / "outputs" / "trajectories" / "track_summary.csv"
 VIDEO_PATH = ROOT / "data" / "input" / "sample.mp4"
 
-cap = cv2.VideoCapture(str(VIDEO_PATH))
-fps = cap.get(cv2.CAP_PROP_FPS)
-cap.release()
+TRACK_COLUMNS = [
+    "frame", "track_id", "class_name", "confidence",
+    "x1", "y1", "x2", "y2", "center_x", "center_y",
+]
+NUMERIC_COLUMNS = [
+    "frame", "track_id", "confidence",
+    "x1", "y1", "x2", "y2", "center_x", "center_y",
+]
 
-if fps <= 0:
-    raise ValueError("Could not determine video FPS.")
+
+def load_tracking_data(path):
+    df = read_validated_csv(
+        path,
+        required_columns=TRACK_COLUMNS,
+        numeric_columns=NUMERIC_COLUMNS,
+        integer_columns=("frame", "track_id"),
+        unique_by=("track_id", "frame"),
+        description="Tracking CSV",
+    )
+
+    if (df["frame"] < 1).any():
+        raise ValueError("Tracking CSV contains frame numbers below 1.")
+
+    if (df["track_id"] < 0).any():
+        raise ValueError("Tracking CSV contains negative track IDs.")
+
+    if not df["class_name"].map(
+        lambda value: isinstance(value, str) and bool(value.strip())
+    ).all():
+        raise ValueError("Tracking CSV contains missing or empty class names.")
+
+    if not df["confidence"].between(0, 1).all():
+        raise ValueError("Tracking confidence values must be between 0 and 1.")
+
+    if (df["x2"] < df["x1"]).any() or (df["y2"] < df["y1"]).any():
+        raise ValueError("Tracking CSV contains invalid bounding boxes.")
+
+    return df
 
 
-def main():
-    df = pd.read_csv(INPUT_CSV)
+def get_video_fps(path):
+    require_nonempty_file(path, "Source video")
 
-    if df.empty:
-        raise ValueError("Tracking CSV contains no detections.")
+    cap = cv2.VideoCapture(str(path))
+    try:
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not open source video: {path}")
 
+        fps = float(cap.get(cv2.CAP_PROP_FPS))
+        if not np.isfinite(fps) or fps <= 0:
+            raise ValueError(f"Invalid video FPS ({fps}) in {path}")
+
+        return fps
+    finally:
+        cap.release()
+
+
+def build_summary(df, fps):
     summaries = []
 
     for track_id, track in df.groupby("track_id"):
@@ -30,36 +77,46 @@ def main():
         first = track.iloc[0]
         last = track.iloc[-1]
 
-        dx = last["center_x"] - first["center_x"]
-        dy = last["center_y"] - first["center_y"]
-        displacement = (dx**2 + dy**2) ** 0.5
+        dx = float(last["center_x"] - first["center_x"])
+        dy = float(last["center_y"] - first["center_y"])
+        displacement = float(np.hypot(dx, dy))
 
         frame_span = int(last["frame"] - first["frame"])
-        duration_seconds = frame_span / fps 
-        points = track[["center_x", "center_y"]].to_numpy()
-        step_distances = (
-            (points[1:] - points[:-1]) ** 2
-        ).sum(axis=1) ** 0.5
+        points = track[["center_x", "center_y"]].to_numpy(dtype=float)
 
-        path_length_pixels = step_distances.sum()
+        step_distances = np.hypot(
+            np.diff(points[:, 0]),
+            np.diff(points[:, 1]),
+        )
+
+        class_modes = track["class_name"].mode()
+        if class_modes.empty:
+            raise ValueError(f"Track {track_id} has no valid class label.")
 
         summaries.append({
-            "track_id": track_id,
-            "class_name": track["class_name"].mode().iloc[0],
-            "observed_frames": track["frame"].nunique(),
+            "track_id": int(track_id),
+            "class_name": class_modes.iloc[0],
+            "observed_frames": int(track["frame"].nunique()),
             "first_frame": int(first["frame"]),
             "last_frame": int(last["frame"]),
-            "duration_seconds": round(duration_seconds, 2),
+            "duration_seconds": round(frame_span / fps, 2),
             "displacement_pixels": round(displacement, 2),
             "avg_displacement_pixels_per_frame": round(
                 displacement / max(frame_span, 1), 2
             ),
-            "mean_confidence": round(track["confidence"].mean(), 4),
-            "path_length_pixels": round(path_length_pixels, 2),
+            "mean_confidence": round(float(track["confidence"].mean()), 4),
+            "path_length_pixels": round(float(step_distances.sum()), 2),
         })
 
-    summary = pd.DataFrame(summaries)
-    summary.to_csv(OUTPUT_CSV, index=False)
+    return pd.DataFrame(summaries)
+
+
+def main():
+    df = load_tracking_data(INPUT_CSV)
+    fps = get_video_fps(VIDEO_PATH)
+    summary = build_summary(df, fps)
+
+    write_csv_atomic(summary, OUTPUT_CSV)
 
     print(f"Unique track IDs: {df['track_id'].nunique()}")
     print("\nObjects by class:")

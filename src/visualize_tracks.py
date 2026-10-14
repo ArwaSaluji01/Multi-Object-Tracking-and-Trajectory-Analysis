@@ -1,5 +1,5 @@
-
 from pathlib import Path
+from io_validation import read_validated_csv
 
 import matplotlib
 matplotlib.use("Agg")
@@ -18,11 +18,29 @@ PLOT_PATH = ROOT / "outputs" / "trajectories" / "plots"
 def main():
     PLOT_PATH.mkdir(parents=True, exist_ok=True)
 
-    tracks = pd.read_csv(CSV_PATH)
-    summary = pd.read_csv(SUMMARY_PATH)
+    tracks = read_validated_csv(
+        CSV_PATH,
+        required_columns=[
+            "frame", "track_id", "class_name", "center_x", "center_y"
+        ],
+        numeric_columns=["frame", "track_id", "center_x", "center_y"],
+        integer_columns=("frame", "track_id"),
+        unique_by=("track_id", "frame"),
+        description="Tracking CSV",
+    )
 
-    if tracks.empty or summary.empty:
-        raise ValueError("Tracking or summary CSV is empty.")
+    summary = read_validated_csv(
+        SUMMARY_PATH,
+        required_columns=[
+            "track_id", "duration_seconds", "path_length_pixels"
+        ],
+        numeric_columns=[
+            "track_id", "duration_seconds", "path_length_pixels"
+        ],
+        integer_columns=("track_id",),
+        unique_by=("track_id",),
+        description="Track summary CSV",
+    )
 
     # 1. Number of unique track IDs by class
     counts = (

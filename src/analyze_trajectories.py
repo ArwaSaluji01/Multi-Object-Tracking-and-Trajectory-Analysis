@@ -12,22 +12,64 @@ OUT = ROOT / "outputs" / "trajectories" / "advanced"
 OUT.mkdir(parents=True, exist_ok=True)
 
 
-def load_tracks(path):
-    df = pd.read_csv(path)
 
-    required = {"frame", "track_id", "center_x", "center_y"}
-    missing = required - set(df.columns)
+def load_tracks(path):
+    path = Path(path)
+
+    if not path.is_file():
+        raise FileNotFoundError(f"Tracking CSV not found: {path}")
+
+    if path.stat().st_size == 0:
+        raise ValueError(f"Tracking CSV is empty: {path}")
+
+    try:
+        df = pd.read_csv(path)
+    except pd.errors.EmptyDataError as exc:
+        raise ValueError(f"Tracking CSV has no readable header: {path}") from exc
+    except pd.errors.ParserError as exc:
+        raise ValueError(f"Malformed tracking CSV: {path}") from exc
+
+    required = ["frame", "track_id", "center_x", "center_y"]
+    missing = set(required) - set(df.columns)
+
     if missing:
+        raise ValueError(f"Missing columns: {sorted(missing)}")
+
+    for column in required:
+        values = pd.to_numeric(df[column], errors="coerce")
+        array = values.to_numpy(dtype=float, na_value=np.nan)
+
+        if not np.isfinite(array).all():
+            raise ValueError(
+                f"Column '{column}' contains missing, non-numeric, "
+                "or non-finite values."
+            )
+
+        df[column] = values
+
+    for column in ("frame", "track_id"):
+        values = df[column].to_numpy(dtype=float)
+
+        if not np.equal(values, np.floor(values)).all():
+            raise ValueError(
+                f"Column '{column}' must contain whole numbers."
+            )
+
+        df[column] = df[column].astype("int64")
+
+    if (df["frame"] < 1).any():
+        raise ValueError("Frame numbers must be >= 1.")
+
+    if (df["track_id"] < 0).any():
+        raise ValueError("Track IDs must be >= 0.")
+
+    if df.duplicated(subset=["track_id", "frame"]).any():
         raise ValueError(
-            f"Missing columns: {sorted(missing)}. "
-            f"Available columns: {list(df.columns)}"
+            "Duplicate observations found for the same track and frame."
         )
 
     df = df.rename(columns={"center_x": "x", "center_y": "y"})
-    df = df.dropna(subset=["frame", "track_id", "x", "y"]).copy()
-    df["frame"] = df["frame"].astype(int)
-    df["track_id"] = df["track_id"].astype(int)
-    return df.sort_values(["track_id", "frame"])
+    return df.sort_values(["track_id", "frame"]).reset_index(drop=True)
 
 
 def calculate_metrics(df):
