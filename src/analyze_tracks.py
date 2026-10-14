@@ -70,6 +70,20 @@ def get_video_fps(path):
 
 
 def build_summary(df, fps):
+    if df.empty:
+        raise ValueError("Cannot summarize an empty tracking DataFrame.")
+
+    if not np.isfinite(fps) or fps <= 0:
+        raise ValueError(f"FPS must be finite and positive; received {fps}.")
+
+    required = {
+        "track_id", "frame", "class_name", "confidence",
+        "center_x", "center_y",
+    }
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Tracking DataFrame missing columns: {sorted(missing)}")
+
     summaries = []
 
     for track_id, track in df.groupby("track_id"):
@@ -81,9 +95,10 @@ def build_summary(df, fps):
         dy = float(last["center_y"] - first["center_y"])
         displacement = float(np.hypot(dx, dy))
 
-        frame_span = int(last["frame"] - first["frame"])
-        points = track[["center_x", "center_y"]].to_numpy(dtype=float)
+        elapsed_frames = int(last["frame"] - first["frame"])
+        inclusive_frames = elapsed_frames + 1
 
+        points = track[["center_x", "center_y"]].to_numpy(dtype=float)
         step_distances = np.hypot(
             np.diff(points[:, 0]),
             np.diff(points[:, 1]),
@@ -99,12 +114,17 @@ def build_summary(df, fps):
             "observed_frames": int(track["frame"].nunique()),
             "first_frame": int(first["frame"]),
             "last_frame": int(last["frame"]),
-            "duration_seconds": round(frame_span / fps, 2),
+            # Elapsed time between the first and last observations.
+            "duration_seconds": round(elapsed_frames / fps, 4),
+            # Inclusive duration represented by the frame span.
+            "span_seconds": round(inclusive_frames / fps, 4),
             "displacement_pixels": round(displacement, 2),
             "avg_displacement_pixels_per_frame": round(
-                displacement / max(frame_span, 1), 2
+                displacement / elapsed_frames if elapsed_frames else 0.0,
+                2,
             ),
             "mean_confidence": round(float(track["confidence"].mean()), 4),
+            # Observed point-to-point path; unobserved motion cannot be recovered.
             "path_length_pixels": round(float(step_distances.sum()), 2),
         })
 

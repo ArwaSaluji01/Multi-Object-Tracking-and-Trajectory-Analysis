@@ -1,16 +1,17 @@
 import argparse
 from pathlib import Path
 
-import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+
+from io_validation import write_csv_atomic
+from pipeline_utils import atomic_output_path
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INPUT = ROOT / "outputs" / "trajectories" / "tracks.csv"
 OUT = ROOT / "outputs" / "trajectories" / "advanced"
-OUT.mkdir(parents=True, exist_ok=True)
-
 
 
 def load_tracks(path):
@@ -51,9 +52,7 @@ def load_tracks(path):
         values = df[column].to_numpy(dtype=float)
 
         if not np.equal(values, np.floor(values)).all():
-            raise ValueError(
-                f"Column '{column}' must contain whole numbers."
-            )
+            raise ValueError(f"Column '{column}' must contain whole numbers.")
 
         df[column] = df[column].astype("int64")
 
@@ -73,88 +72,145 @@ def load_tracks(path):
 
 
 def calculate_metrics(df):
+    required = {"frame", "track_id", "x", "y"}
+    missing = required - set(df.columns)
+
+    if missing:
+        raise ValueError(f"Trajectory DataFrame missing columns: {sorted(missing)}")
+
+    if df.empty:
+        raise ValueError("Cannot calculate metrics for an empty DataFrame.")
+
+    data = df.copy()
+
+    for column in ("frame", "track_id", "x", "y"):
+        values = pd.to_numeric(data[column], errors="coerce").to_numpy(
+            dtype=float, na_value=np.nan
+        )
+        if not np.isfinite(values).all():
+            raise ValueError(
+                f"Column '{column}' contains non-finite or non-numeric values."
+            )
+        data[column] = values
+
+    for column in ("frame", "track_id"):
+        values = data[column].to_numpy(dtype=float)
+        if not np.equal(values, np.floor(values)).all():
+            raise ValueError(f"Column '{column}' must contain whole numbers.")
+
+    data["frame"] = data["frame"].astype("int64")
+    data["track_id"] = data["track_id"].astype("int64")
+
+    if (data["frame"] < 1).any():
+        raise ValueError("Frame numbers must be >= 1.")
+    if (data["track_id"] < 0).any():
+        raise ValueError("Track IDs must be >= 0.")
+    if data.duplicated(subset=["track_id", "frame"]).any():
+        raise ValueError("Duplicate observations found for the same track and frame.")
+
     rows = []
 
-    for track_id, track in df.groupby("track_id"):
+    for track_id, track in data.groupby("track_id"):
         track = track.sort_values("frame")
         frames = track["frame"].to_numpy()
         x = track["x"].to_numpy(dtype=float)
         y = track["y"].to_numpy(dtype=float)
 
-        dx = np.diff(x)
-        dy = np.diff(y)
-        distances = np.hypot(dx, dy)
-
         frame_gaps = np.diff(frames)
-        valid_steps = frame_gaps > 0
-        speeds = distances[valid_steps] / frame_gaps[valid_steps]
+        distances = np.hypot(np.diff(x), np.diff(y))
+
+        # Average speed per observed interval accounts for missing frames.
+        interval_speeds = distances / frame_gaps if len(frame_gaps) else np.array([])
+        path_length = float(distances.sum())
+        net_displacement = float(np.hypot(x[-1] - x[0], y[-1] - y[0]))
 
         rows.append({
-            "track_id": track_id,
-            "observations": len(track),
-            "first_frame": frames[0],
-            "last_frame": frames[-1],
-            "span_frames": frames[-1] - frames[0] + 1,
+            "track_id": int(track_id),
+            "observations": int(len(track)),
+            "first_frame": int(frames[0]),
+            "last_frame": int(frames[-1]),
+            "span_frames": int(frames[-1] - frames[0] + 1),
             "fragmentation_gaps": int(np.sum(frame_gaps > 1)),
-            "missing_frames": int(np.sum(np.maximum(frame_gaps - 1, 0))),
-            "path_length_px": float(distances.sum()),
-            "net_displacement_px": float(
-                np.hypot(x[-1] - x[0], y[-1] - y[0])
+            "missing_frames": int(np.maximum(frame_gaps - 1, 0).sum()),
+            "path_length_px": path_length,
+            "net_displacement_px": net_displacement,
+            "mean_speed_px_per_frame": (
+                float(interval_speeds.mean()) if len(interval_speeds) else 0.0
             ),
-            "mean_speed_px_per_frame": float(speeds.mean())
-            if len(speeds) else 0.0,
-            "max_speed_px_per_frame": float(speeds.max())
-            if len(speeds) else 0.0,
-            "straightness": float(
-                np.hypot(x[-1] - x[0], y[-1] - y[0])
-                / distances.sum()
-            ) if distances.sum() > 0 else 0.0,
+            "max_speed_px_per_frame": (
+                float(interval_speeds.max()) if len(interval_speeds) else 0.0
+            ),
+            "straightness": (
+                net_displacement / path_length if path_length > 0 else 0.0
+            ),
         })
 
     return pd.DataFrame(rows)
 
 
-def plot_speed_distribution(metrics):
-    plt.figure(figsize=(9, 5))
-    plt.hist(
-        metrics["mean_speed_px_per_frame"],
-        bins=30,
-        edgecolor="black"
-    )
-    plt.xlabel("Mean speed (pixels/frame)")
-    plt.ylabel("Number of tracks")
-    plt.title("Pedestrian Track Speed Distribution")
-    plt.tight_layout()
-    plt.savefig(OUT / "speed_distribution.png", dpi=160)
-    plt.close()
+def _save_plot(output_path, plot_function):
+    with atomic_output_path(output_path) as temporary_path:
+        plot_function(temporary_path)
 
 
-def plot_straightness(metrics):
-    plt.figure(figsize=(9, 5))
-    plt.hist(metrics["straightness"], bins=25, edgecolor="black")
-    plt.xlabel("Trajectory straightness (0 = winding, 1 = straight)")
-    plt.ylabel("Number of tracks")
-    plt.title("Trajectory Straightness Distribution")
-    plt.tight_layout()
-    plt.savefig(OUT / "trajectory_straightness.png", dpi=160)
-    plt.close()
+def plot_speed_distribution(metrics, output_path=None):
+    output_path = output_path or OUT / "speed_distribution.png"
+
+    def draw(path):
+        fig, ax = plt.subplots(figsize=(9, 5))
+        try:
+            ax.hist(
+                metrics["mean_speed_px_per_frame"],
+                bins=30,
+                edgecolor="black",
+            )
+            ax.set_xlabel("Mean speed (pixels/frame)")
+            ax.set_ylabel("Number of tracks")
+            ax.set_title("Track Speed Distribution")
+            fig.tight_layout()
+            fig.savefig(path, dpi=160)
+        finally:
+            plt.close(fig)
+
+    _save_plot(output_path, draw)
 
 
-def plot_occupancy(df):
-    plt.figure(figsize=(9, 6))
-    plt.hist2d(
-        df["x"], df["y"],
-        bins=40,
-        cmap="hot"
-    )
-    plt.colorbar(label="Observations")
-    plt.xlabel("Image X (pixels)")
-    plt.ylabel("Image Y (pixels)")
-    plt.title("Pedestrian Movement Occupancy Map")
-    plt.gca().invert_yaxis()
-    plt.tight_layout()
-    plt.savefig(OUT / "occupancy_map.png", dpi=160)
-    plt.close()
+def plot_straightness(metrics, output_path=None):
+    output_path = output_path or OUT / "trajectory_straightness.png"
+
+    def draw(path):
+        fig, ax = plt.subplots(figsize=(9, 5))
+        try:
+            ax.hist(metrics["straightness"], bins=25, edgecolor="black")
+            ax.set_xlabel("Trajectory straightness (0 = winding, 1 = straight)")
+            ax.set_ylabel("Number of tracks")
+            ax.set_title("Trajectory Straightness Distribution")
+            fig.tight_layout()
+            fig.savefig(path, dpi=160)
+        finally:
+            plt.close(fig)
+
+    _save_plot(output_path, draw)
+
+
+def plot_occupancy(df, output_path=None):
+    output_path = output_path or OUT / "occupancy_map.png"
+
+    def draw(path):
+        fig, ax = plt.subplots(figsize=(9, 6))
+        try:
+            histogram = ax.hist2d(df["x"], df["y"], bins=40, cmap="hot")
+            fig.colorbar(histogram[3], ax=ax, label="Observations")
+            ax.set_xlabel("Image X (pixels)")
+            ax.set_ylabel("Image Y (pixels)")
+            ax.set_title("Object Movement Occupancy Map")
+            ax.invert_yaxis()
+            fig.tight_layout()
+            fig.savefig(path, dpi=160)
+        finally:
+            plt.close(fig)
+
+    _save_plot(output_path, draw)
 
 
 def main():
@@ -162,15 +218,11 @@ def main():
     parser.add_argument("--input", type=Path, default=INPUT)
     args = parser.parse_args()
 
-    if not args.input.exists():
-        raise FileNotFoundError(
-            f"Tracks file not found: {args.input}"
-        )
-
     df = load_tracks(args.input)
     metrics = calculate_metrics(df)
 
-    metrics.to_csv(OUT / "trajectory_metrics.csv", index=False)
+    OUT.mkdir(parents=True, exist_ok=True)
+    write_csv_atomic(metrics, OUT / "trajectory_metrics.csv")
 
     plot_speed_distribution(metrics)
     plot_straightness(metrics)

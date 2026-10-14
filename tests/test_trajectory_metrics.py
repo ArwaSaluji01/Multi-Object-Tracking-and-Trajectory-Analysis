@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from analyze_trajectories import calculate_metrics, load_tracks
 from io_validation import read_validated_csv, write_csv_atomic
+from analyze_tracks import build_summary
 
 
 def test_load_tracks_sorts_observations(tmp_path):
@@ -124,3 +125,126 @@ def test_atomic_csv_write(tmp_path):
 
     assert pd.read_csv(path)["value"].tolist() == [42]
     assert not (tmp_path / ".result.tmp.csv").exists()
+
+def test_speed_accounts_for_missing_frames():
+    df = pd.DataFrame({
+        "frame": [1, 4],
+        "track_id": [7, 7],
+        "x": [0, 6],
+        "y": [0, 0],
+    })
+
+    metrics = calculate_metrics(df).iloc[0]
+
+    assert metrics["path_length_px"] == 6
+    assert metrics["net_displacement_px"] == 6
+    assert metrics["mean_speed_px_per_frame"] == 2
+    assert metrics["max_speed_px_per_frame"] == 2
+    assert metrics["missing_frames"] == 2
+
+
+def test_stationary_track_has_zero_speed_and_straightness():
+    df = pd.DataFrame({
+        "frame": [1, 2, 3],
+        "track_id": [7, 7, 7],
+        "x": [5, 5, 5],
+        "y": [10, 10, 10],
+    })
+
+    metrics = calculate_metrics(df).iloc[0]
+
+    assert metrics["path_length_px"] == 0
+    assert metrics["net_displacement_px"] == 0
+    assert metrics["mean_speed_px_per_frame"] == 0
+    assert metrics["straightness"] == 0
+
+
+def test_single_observation_track_has_zero_motion():
+    df = pd.DataFrame({
+        "frame": [10],
+        "track_id": [3],
+        "x": [12],
+        "y": [25],
+    })
+
+    metrics = calculate_metrics(df).iloc[0]
+
+    assert metrics["observations"] == 1
+    assert metrics["span_frames"] == 1
+    assert metrics["path_length_px"] == 0
+    assert metrics["net_displacement_px"] == 0
+    assert metrics["mean_speed_px_per_frame"] == 0
+    assert metrics["straightness"] == 0
+
+
+def test_calculate_metrics_rejects_empty_dataframe():
+    df = pd.DataFrame(columns=["frame", "track_id", "x", "y"])
+
+    with pytest.raises(ValueError, match="empty"):
+        calculate_metrics(df)
+
+
+def test_calculate_metrics_rejects_duplicate_observations():
+    df = pd.DataFrame({
+        "frame": [1, 1],
+        "track_id": [7, 7],
+        "x": [0, 1],
+        "y": [0, 1],
+    })
+
+    with pytest.raises(ValueError, match="Duplicate observations"):
+        calculate_metrics(df)
+
+
+def test_calculate_metrics_rejects_non_finite_coordinates():
+    df = pd.DataFrame({
+        "frame": [1],
+        "track_id": [7],
+        "x": [float("inf")],
+        "y": [0],
+    })
+
+    with pytest.raises(ValueError, match="non-finite"):
+        calculate_metrics(df)
+
+
+def test_track_summary_duration_uses_fps():
+    df = pd.DataFrame({
+        "frame": [10, 40],
+        "track_id": [7, 7],
+        "class_name": ["person", "person"],
+        "confidence": [0.8, 0.9],
+        "center_x": [0, 30],
+        "center_y": [0, 40],
+    })
+
+    summary = build_summary(df, fps=30).iloc[0]
+
+    assert summary["duration_seconds"] == 1.0
+    assert summary["span_seconds"] == pytest.approx(31 / 30, abs=0.0001)
+    assert summary["displacement_pixels"] == 50
+    assert summary["avg_displacement_pixels_per_frame"] == pytest.approx(1.67)
+
+
+def test_track_summary_rejects_invalid_fps():
+    df = pd.DataFrame({
+        "frame": [1],
+        "track_id": [7],
+        "class_name": ["person"],
+        "confidence": [0.9],
+        "center_x": [10],
+        "center_y": [20],
+    })
+
+    with pytest.raises(ValueError, match="FPS"):
+        build_summary(df, fps=0)
+
+
+def test_track_summary_rejects_empty_dataframe():
+    df = pd.DataFrame(columns=[
+        "frame", "track_id", "class_name",
+        "confidence", "center_x", "center_y",
+    ])
+
+    with pytest.raises(ValueError, match="empty"):
+        build_summary(df, fps=30)
