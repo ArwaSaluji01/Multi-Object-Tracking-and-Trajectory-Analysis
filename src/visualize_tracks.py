@@ -11,7 +11,6 @@ if __package__:
 else:
     from io_validation import read_validated_csv
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "outputs" / "trajectories"
 CSV_PATH = DATA_PATH / "tracks.csv"

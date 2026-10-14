@@ -174,7 +174,7 @@ def test_prepare_evaluation_data_checks_frame_sequence(tmp_path, monkeypatch):
     assert (gt_sequence / "gt" / "gt.txt").is_file()
     assert (gt_sequence / "seqinfo.ini").is_file()
     assert (
-        gt_root / "seqmaps" / "MOT17-train.txt"
+        gt_root / "seqmaps" / "MOT17-02-FRCNN-only.txt"
     ).read_text(encoding="utf-8") == f"name\n{evaluator.SEQUENCE}\n"
 
 

@@ -5,19 +5,11 @@ import numpy as np
 import pandas as pd
 
 if __package__:
-    from src.io_validation import read_validated_csv
+    from src.io_validation import read_validated_csv, write_csv_atomic, require_nonempty_file
+    from src.pipeline_utils import atomic_output_path
 else:
-    from io_validation import read_validated_csv
-
-if __package__:
-    from src.io_validation import require_nonempty_file
-else:
-    from io_validation import require_nonempty_file
-
-if __package__:
-    from src.io_validation import write_csv_atomic
-else:
-    from io_validation import write_csv_atomic
+    from io_validation import read_validated_csv, write_csv_atomic, require_nonempty_file
+    from pipeline_utils import atomic_output_path
 
 ROOT = Path(__file__).resolve().parents[1]
 INPUT_CSV = ROOT / "outputs" / "trajectories" / "tracks.csv"

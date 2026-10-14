@@ -230,7 +230,7 @@ def prepare_evaluation_data():
 
     destination_gt = GT_SEQUENCE / "gt" / "gt.txt"
     destination_seqinfo = GT_SEQUENCE / "seqinfo.ini"
-    seqmap = GT_ROOT / "seqmaps" / "MOT17-train.txt"
+    seqmap = GT_ROOT / "seqmaps" / "MOT17-02-FRCNN-only.txt"
 
     (GT_SEQUENCE / "gt").mkdir(parents=True, exist_ok=True)
     (GT_ROOT / "seqmaps").mkdir(parents=True, exist_ok=True)
@@ -383,7 +383,7 @@ def write_evaluation_manifest():
 
 def run_trackeval():
     script = TRACK_EVAL / "scripts" / "run_mot_challenge.py"
-    seqmap = GT_ROOT / "seqmaps" / "MOT17-train.txt"
+    seqmap = GT_ROOT / "seqmaps" / "MOT17-02-FRCNN-only.txt"
 
     for path in (script, PREDICTIONS, GT_SEQUENCE / "gt" / "gt.txt",
                  GT_SEQUENCE / "seqinfo.ini", seqmap):
