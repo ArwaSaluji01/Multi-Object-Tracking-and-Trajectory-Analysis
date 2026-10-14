@@ -1,142 +1,343 @@
 # Multi-Object Tracking & Trajectory Analysis
 
-A computer vision project for detecting and tracking multiple objects across video frames, analyzing their trajectories, comparing tracker configurations, and evaluating tracking performance using standard MOT metrics.
+[![Project CI](https://github.com/ArwaSaluji01/Multi-Object-Tracking-and-Trajectory-Analysis/actions/workflows/ci.yml/badge.svg)](https://github.com/ArwaSaluji01/Multi-Object-Tracking-and-Trajectory-Analysis/actions/workflows/ci.yml)
+
+An end-to-end computer vision pipeline for detecting and tracking multiple objects across video frames, analyzing their movement trajectories, comparing tracking configurations, and evaluating tracking predictions against MOT17 ground truth.
 
 ## Overview
 
-The project combines **YOLO11n** object detection with **ByteTrack** multi-object tracking to generate persistent track IDs and trajectory data from video. It also includes trajectory visualization, configurable tracking experiments, and quantitative evaluation on a MOT17 sequence.
+Object detection identifies objects in individual frames, but multi-object tracking associates detections over time to maintain object identities. This project combines YOLO-based detection with ByteTrack to generate object tracks, record movement trajectories, calculate track-level statistics, visualize results, and evaluate tracking performance.
 
-### Key Features
+The project also emphasizes engineering reliability through validated input data, safer output handling, experiment metadata, automated tests, and continuous integration.
 
-- Real-time-style object detection and tracking with YOLO11n + ByteTrack
-- Track-level statistics and trajectory visualizations
-- Comparison of ByteTrack configurations
-- Pedestrian tracking evaluation using HOTA, IDF1, and MOTA
-- Trajectory analytics: path length, displacement, speed, straightness, and observation gaps
-- Automated tests for trajectory-analysis functions
+## Key Features
 
-## Pipeline
+- **Object detection and tracking:** YOLO11n with ByteTrack assigns track IDs across video frames.
+- **Annotated video output:** Visualizes detected objects, bounding boxes, IDs, and trajectories.
+- **Track analytics:** Calculates track duration, observed frames, displacement, path length, and confidence statistics.
+- **Trajectory analysis:** Computes movement metrics while accounting for gaps between observed frames.
+- **Visualization:** Generates plots for class counts, track durations, path lengths, and selected trajectories.
+- **Configuration experiments:** Compares default, balanced, and persistent ByteTrack settings.
+- **MOT17 evaluation:** Exports predictions and evaluates one MOT17 training sequence with TrackEval.
+- **Input validation:** Checks tracking CSVs and MOT-format files for malformed data, invalid values, and duplicate observations.
+- **Safer outputs:** Uses atomic output handling to reduce the risk of leaving incomplete result files.
+- **Automated quality checks:** Includes pytest tests, Python compilation checks, dependency validation, and GitHub Actions CI.
 
-1. Read an input video.
-2. Detect objects with pretrained YOLO11n.
-3. Associate detections across frames with ByteTrack.
-4. Export detections and track IDs to CSV.
-5. Analyze trajectories and visualize tracking statistics.
-6. Evaluate pedestrian tracking on a MOT17 sequence using TrackEval.
+## Pipeline Architecture
 
-## Tech Stack
+```text
+Input Video
+    |
+    v
+YOLO11n Object Detection
+    |
+    v
+ByteTrack Association
+    |
+    +----------------------+
+    |                      |
+    v                      v
+Annotated Video       Tracking CSV
+                           |
+                           v
+                    Data Validation
+                           |
+              +------------+------------+
+              |            |            |
+              v            v            v
+         Track Summary  Trajectory   Visualizations
+                        Analytics
+              |
+              v
+       Experiment Comparison
 
-Python · OpenCV · Ultralytics YOLO · ByteTrack · NumPy · Pandas · Matplotlib · TrackEval · pytest
+MOT17 Ground Truth + Exported Predictions
+                    |
+                    v
+                 TrackEval
+                    |
+                    v
+          MOT Tracking Metrics
+```
 
-## Setup
+## Technology Stack
+
+| Component | Technology |
+|---|---|
+| Language | Python |
+| Object detection | Ultralytics YOLO11n |
+| Multi-object tracking | ByteTrack |
+| Video processing | OpenCV |
+| Data analysis | Pandas, NumPy |
+| Numerical analysis | SciPy |
+| Visualization | Matplotlib |
+| Benchmark evaluation | TrackEval, MOTChallenge format |
+| Testing | pytest |
+| Continuous integration | GitHub Actions |
+
+## Repository Structure
+
+```text
+multi-object-tracking/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── configs/
+│   ├── bytetrack_balanced.yaml
+│   └── bytetrack_persistent.yaml
+├── data/
+│   └── input/
+│       └── sample.mp4
+├── patches/
+│   ├── trackeval-12c8791-compat.patch
+│   └── trackeval-revision.txt
+├── src/
+│   ├── track_video.py
+│   ├── run_experiments.py
+│   ├── analyze_tracks.py
+│   ├── analyze_trajectories.py
+│   ├── visualize_tracks.py
+│   ├── evaluate_mot17.py
+│   ├── io_validation.py
+│   └── pipeline_utils.py
+├── tests/
+│   ├── test_evaluate_mot17.py
+│   ├── test_io_validation.py
+│   ├── test_pipeline_utils.py
+│   ├── test_run_experiments.py
+│   └── test_trajectory_metrics.py
+├── outputs/
+│   ├── trajectories/
+│   └── benchmark/
+├── requirements.txt
+├── .gitignore
+└── README.md
+```
+
+Generated outputs and local dataset files may be excluded from Git. The tree above highlights the principal project components rather than every file.
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11
+- Git
+- A compatible environment for the dependencies pinned in `requirements.txt`
+- A video file for tracking
+
+CPU inference is supported. An NVIDIA GPU may improve throughput when a compatible CUDA environment is available.
+
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/ArwaSaluji01/Multi-Object-Tracking-and-Trajectory-Analysis.git
-cd multi-object-tracking
-
-python -m venv .venv
+cd Multi-Object-Tracking-and-Trajectory-Analysis
 ```
 
-Activate the environment on Windows:
+### 2. Create and activate a virtual environment
+
+**Windows PowerShell**
 
 ```powershell
-.venv\Scripts\Activate.ps1
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-Install dependencies:
+**Linux/macOS**
 
 ```bash
-python -m pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
-Download or provide an input video at `data/input/sample.mp4`.
+### 3. Install dependencies
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip check
+```
+
+The first inference run may download the configured YOLO model weights if they are not already available locally.
 
 ## Usage
 
-Run tracking:
+Run commands from the repository root with the virtual environment activated. The scripts use their configured input paths and settings; update those settings in the relevant source file or configuration if your local paths differ.
+
+### Run object tracking
 
 ```bash
-python src/track_video.py
+python -m src.track_video
 ```
 
-Analyze track statistics:
+The tracking pipeline processes the configured video, runs object detection and tracking, and exports an annotated video and tracking observations.
+
+### Analyze track statistics
 
 ```bash
-python src/analyze_tracks.py
+python -m src.analyze_tracks
 ```
 
-Generate visualizations:
+This produces a track summary with statistics such as observed frames, first and last frame, duration, displacement, path length, and mean confidence.
+
+### Run advanced trajectory analysis
 
 ```bash
-python src/visualize_tracks.py
+python -m src.analyze_trajectories
 ```
 
-Compare tracker configurations:
+This calculates additional trajectory metrics and saves analysis outputs and plots.
+
+### Generate visualizations
 
 ```bash
-python src/run_experiments.py
+python -m src.visualize_tracks
 ```
 
-Analyze trajectories:
+The visualization script generates plots for class counts, path lengths, top trajectories, and track durations.
+
+### Compare tracker configurations
 
 ```bash
-python src/analyze_trajectories.py
+python -m src.run_experiments
 ```
 
-Run tests:
+The experiment runner compares the configured default, balanced, and persistent ByteTrack settings and records tracking statistics and timing metadata. Use the same input video when comparing configurations.
+
+### Evaluate on MOT17
 
 ```bash
-python -m pytest -v
+python -m src.evaluate_mot17
 ```
 
-For MOT17 evaluation, download the MOT17 training sequence `MOT17-02-FRCNN` and place it under `data/MOT17/train/`. Then run:
+This command runs the configured evaluation pipeline for the `MOT17-02-FRCNN` sequence. The MOT17 dataset and the compatible local TrackEval checkout must be available in the expected directory structure.
 
-```bash
-python src/evaluate_mot17.py
-```
+The evaluation script exports predictions, validates MOT-format data, creates an evaluation manifest, and runs TrackEval. Dataset files and model weights are not necessarily included in this repository.
 
-The evaluation script uses TrackEval under `external/TrackEval/`. Follow the repository's evaluation setup instructions if its legacy dependencies need compatibility adjustments.
+## Tracking Data Format
+
+The tracking CSV contains one observation per tracked object per frame.
+
+| Column | Description |
+|---|---|
+| `frame` | Frame number |
+| `track_id` | Assigned object identity |
+| `class_name` | Predicted object class |
+| `confidence` | Detection confidence |
+| `x1`, `y1` | Top-left bounding-box coordinates |
+| `x2`, `y2` | Bottom-right bounding-box coordinates |
+| `center_x`, `center_y` | Bounding-box center coordinates |
+
+The observations are used to calculate track-level statistics and reconstruct object trajectories.
 
 ## Results
 
-### MOT17-02-FRCNN baseline
+### Sample-video analysis
 
-Evaluation was performed on **one 600-frame sequence**, not the complete MOT17 benchmark.
+The sample-video run produced the following results:
+
+| Measurement | Result |
+|---|---:|
+| Frames processed | 1,762 |
+| Tracking observations | 35,369 |
+| Unique track IDs | 514 |
+| Person track IDs | 307 |
+| Car track IDs | 153 |
+| Truck track IDs | 23 |
+| Bus track IDs | 13 |
+
+The class-specific counts represent unique track IDs grouped by predicted class, not necessarily unique physical objects. Tracking can assign multiple IDs to the same real-world object if identity is lost and later re-established.
+
+### ByteTrack configuration comparison
+
+The following results were measured on the same sample video. FPS and runtime are environment-dependent.
+
+| Configuration | Observations | Track IDs | Mean observed frames per track | Tracks observed for ≤10 frames | Gap events | Processing FPS |
+|---|---:|---:|---:|---:|---:|---:|
+| Default | 35,369 | 514 | 68.81 | 171 | 290 | 14.86 |
+| Balanced | 34,973 | 449 | 77.89 | 129 | 217 | 14.31 |
+| Persistent | 35,467 | 501 | 70.79 | 168 | 319 | 11.67 |
+
+The balanced configuration produced fewer short tracks and fewer measured detection-gap events in this run, while also producing fewer total track IDs. These statistics alone do not establish that one configuration is universally more accurate. A ground-truth evaluation is needed for a stronger comparison.
+
+### MOT17 evaluation
+
+The project was evaluated on **one sequence**, `MOT17-02-FRCNN`, from the MOT17 training split—not the full MOT17 benchmark.
 
 | Metric | Result |
 |---|---:|
 | HOTA | 25.147 |
-| IDF1 | 27.452 |
+| Detection Accuracy (DetA) | 19.928 |
+| Association Accuracy (AssA) | 32.041 |
 | MOTA | 19.396 |
+| MOTP | 79.458 |
+| IDF1 | 27.452 |
 | ID switches | 59 |
-| Track fragmentation events | 105 |
+| Ground-truth detections | 18,581 |
+| Predicted detections | 5,585 |
+| Ground-truth identities | 62 |
+| Predicted identities | 106 |
 
-These are baseline results for the current detector and tracker configuration. They are not directly comparable to full-benchmark results reported in research papers.
+These are baseline results for the specified sequence and configuration. They should not be presented as full-benchmark MOT17 scores or as evidence of state-of-the-art performance.
 
-### Tracking configuration experiments
+The evaluation manifest records the sequence, tracker, model, configuration, software versions, and relevant input paths to improve traceability.
 
-On the separate sample video:
+## Testing and Code Quality
 
-- Default and balanced configurations produced identical summary statistics.
-- The persistent configuration produced fewer unique track IDs, but more detection-gap events.
-- These comparisons are diagnostic; the sample video does not have ground-truth tracking annotations.
+Run the automated tests:
 
-### Trajectory analytics
+```bash
+python -m pytest tests/ -v
+```
 
-The sample video produced 35,369 tracked observations across 514 unique track IDs. The analysis exports per-track movement statistics and visualizations, including speed distribution, trajectory straightness, and a spatial occupancy map.
+Run Python compilation checks:
+
+```bash
+python -m compileall -q src tests
+```
+
+Check dependency consistency:
+
+```bash
+python -m pip check
+```
+
+Check whitespace errors in pending Git changes:
+
+```bash
+git diff --check
+```
+
+The test suite covers trajectory metrics, invalid inputs, atomic output handling, experiment configuration, and MOT17 evaluation data validation. GitHub Actions runs automated checks on pushes and pull requests.
+
+## Engineering Considerations
+
+- Input CSV and MOT-format data are validated before analysis or evaluation.
+- Integer ranges, frame numbers, track IDs, duplicate observations, and non-finite values are checked where applicable.
+- Atomic output handling helps preserve previous completed outputs when a new operation fails.
+- Experiment metadata includes configuration information and timing statistics.
+- TrackEval compatibility changes are preserved as a patch and revision record rather than relying only on undocumented local modifications.
 
 ## Limitations
 
-- Image-space distances and speeds are measured in pixels, not calibrated world units.
-- Results depend on detector quality, scene density, occlusion, and tracker configuration.
-- Evaluation covers one MOT17 sequence only.
-- Track gaps are not equivalent to confirmed identity switches.
-- No detector training or fine-tuning is performed.
+- Track IDs can fragment when detections are missed, objects overlap, or the tracker loses an identity.
+- Image-space displacement and path length are measured in pixels, not real-world distance.
+- Results depend on detector quality, confidence thresholds, tracker settings, video conditions, and hardware.
+- The experiment comparison is based on one sample video and is not a general performance guarantee.
+- The MOT17 evaluation covers one training sequence. Full-benchmark results require evaluating all required sequences with the appropriate ground truth and sequence maps.
+- The current pipeline does not claim calibrated physical speed estimation, future trajectory prediction, or production deployment readiness.
 
 ## Future Improvements
 
-- Evaluate across more MOT17 sequences.
-- Compare multiple detectors and tracking algorithms.
-- Improve detection recall and identity consistency.
-- Add camera-motion compensation and calibrated speed estimation.
-- Introduce ground-truth-based trajectory and fragmentation analysis.
+- Evaluate more MOT17 sequences and compare configurations using HOTA, MOTA, IDF1, and identity-switch counts.
+- Tune detection and association parameters against a consistent validation protocol.
+- Investigate identity fragmentation and occlusion-related failures using qualitative video review.
+- Add representative demo media and a documented, reproducible command-line configuration.
+- Explore trajectory clustering, scene-zone analytics, and calibrated real-world motion estimation where camera geometry is available.
+
+## References
+
+- [Ultralytics documentation](https://docs.ultralytics.com/)
+- [ByteTrack paper and project](https://github.com/FoundationVision/ByteTrack)
+- [TrackEval](https://github.com/JonathonLuiten/TrackEval)
+- [MOTChallenge](https://motchallenge.net/)
