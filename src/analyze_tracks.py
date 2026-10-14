@@ -2,11 +2,19 @@
 from pathlib import Path
 
 import pandas as pd
-
+import cv2
 
 ROOT = Path(__file__).resolve().parents[1]
 INPUT_CSV = ROOT / "outputs" / "trajectories" / "tracks.csv"
 OUTPUT_CSV = ROOT / "outputs" / "trajectories" / "track_summary.csv"
+VIDEO_PATH = ROOT / "data" / "input" / "sample.mp4"
+
+cap = cv2.VideoCapture(str(VIDEO_PATH))
+fps = cap.get(cv2.CAP_PROP_FPS)
+cap.release()
+
+if fps <= 0:
+    raise ValueError("Could not determine video FPS.")
 
 
 def main():
@@ -27,7 +35,13 @@ def main():
         displacement = (dx**2 + dy**2) ** 0.5
 
         frame_span = int(last["frame"] - first["frame"])
-        duration_seconds = frame_span / 30.0  # Replace with video FPS
+        duration_seconds = frame_span / fps 
+        points = track[["center_x", "center_y"]].to_numpy()
+        step_distances = (
+            (points[1:] - points[:-1]) ** 2
+        ).sum(axis=1) ** 0.5
+
+        path_length_pixels = step_distances.sum()
 
         summaries.append({
             "track_id": track_id,
@@ -41,6 +55,7 @@ def main():
                 displacement / max(frame_span, 1), 2
             ),
             "mean_confidence": round(track["confidence"].mean(), 4),
+            "path_length_pixels": round(path_length_pixels, 2),
         })
 
     summary = pd.DataFrame(summaries)
