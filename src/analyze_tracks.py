@@ -73,8 +73,17 @@ def build_summary(df, fps):
     if df.empty:
         raise ValueError("Cannot summarize an empty tracking DataFrame.")
 
+    try:
+        fps = float(fps)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"FPS must be a finite positive number; received {fps!r}."
+        ) from exc
+
     if not np.isfinite(fps) or fps <= 0:
-        raise ValueError(f"FPS must be finite and positive; received {fps}.")
+        raise ValueError(
+            f"FPS must be a finite positive number; received {fps!r}."
+        )
 
     required = {
         "track_id", "frame", "class_name", "confidence",

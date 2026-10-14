@@ -61,6 +61,13 @@ def validate_dataframe(
                 f"{source}: column '{column}' must contain whole numbers"
             )
 
+        # int64 conversion must not overflow.
+        if ((values < -(2**63)) | (values >= 2**63)).any():
+            raise ValueError(
+                f"{source}: column '{column}' exceeds the supported "
+                "int64 range"
+            )
+
         result[column] = result[column].astype("int64")
 
     if unique_by:

@@ -95,16 +95,24 @@ def calculate_metrics(df):
 
     for column in ("frame", "track_id"):
         values = data[column].to_numpy(dtype=float)
+
         if not np.equal(values, np.floor(values)).all():
             raise ValueError(f"Column '{column}' must contain whole numbers.")
+
+        if ((values < -(2**63)) | (values >= 2**63)).any():
+            raise ValueError(
+                f"Column '{column}' exceeds the supported int64 range."
+            )
+
+    if (data["frame"] < 1).any():
+        raise ValueError("Frame numbers must be >= 1.")
+
+    if (data["track_id"] < 0).any():
+        raise ValueError("Track IDs must be >= 0.")
 
     data["frame"] = data["frame"].astype("int64")
     data["track_id"] = data["track_id"].astype("int64")
 
-    if (data["frame"] < 1).any():
-        raise ValueError("Frame numbers must be >= 1.")
-    if (data["track_id"] < 0).any():
-        raise ValueError("Track IDs must be >= 0.")
     if data.duplicated(subset=["track_id", "frame"]).any():
         raise ValueError("Duplicate observations found for the same track and frame.")
 

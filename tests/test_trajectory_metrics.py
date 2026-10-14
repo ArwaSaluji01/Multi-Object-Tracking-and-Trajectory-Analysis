@@ -248,3 +248,45 @@ def test_track_summary_rejects_empty_dataframe():
 
     with pytest.raises(ValueError, match="empty"):
         build_summary(df, fps=30)
+
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "message"),
+    [
+        ("frame", 0, "Frame numbers must be >= 1"),
+        ("track_id", -1, "Track IDs must be >= 0"),
+        ("frame", 1e30, "int64 range"),
+        ("track_id", 1e30, "int64 range"),
+    ],
+)
+def test_calculate_metrics_rejects_invalid_integer_values(
+    column, value, message
+):
+    df = pd.DataFrame({
+        "frame": [1, 2],
+        "track_id": [1, 1],
+        "x": [10.0, 20.0],
+        "y": [10.0, 20.0],
+    })
+
+    # Convert before assignment so pandas allows the out-of-range test value.
+    df[column] = df[column].astype(float)
+    df.loc[0, column] = value
+
+    with pytest.raises(ValueError, match=message):
+        calculate_metrics(df)
+        
+@pytest.mark.parametrize("fps", ["invalid", None, 0, -30, float("inf")])
+def test_build_summary_rejects_invalid_fps(fps):
+    df = pd.DataFrame({
+        "track_id": [1, 1],
+        "frame": [1, 2],
+        "class_name": ["person", "person"],
+        "confidence": [0.9, 0.8],
+        "center_x": [10.0, 20.0],
+        "center_y": [15.0, 25.0],
+    })
+
+    with pytest.raises(ValueError, match="FPS"):
+        build_summary(df, fps)
