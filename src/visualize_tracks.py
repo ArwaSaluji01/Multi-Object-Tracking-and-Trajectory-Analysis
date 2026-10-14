@@ -1,11 +1,15 @@
 from pathlib import Path
-from io_validation import read_validated_csv
 
 import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import pandas as pd
+
+if __package__:
+    from src.io_validation import read_validated_csv
+else:
+    from io_validation import read_validated_csv
 
 
 ROOT = Path(__file__).resolve().parents[1]

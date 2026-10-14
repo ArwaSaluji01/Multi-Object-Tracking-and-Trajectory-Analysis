@@ -5,8 +5,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from io_validation import write_csv_atomic
-from pipeline_utils import atomic_output_path
+if __package__:
+    from src.io_validation import write_csv_atomic
+else:
+    from io_validation import write_csv_atomic
+
+if __package__:
+    from src.pipeline_utils import atomic_output_path
+else:
+    from pipeline_utils import atomic_output_path
 
 
 ROOT = Path(__file__).resolve().parents[1]

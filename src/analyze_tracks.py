@@ -4,8 +4,20 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from io_validation import read_validated_csv, require_nonempty_file, write_csv_atomic
+if __package__:
+    from src.io_validation import read_validated_csv
+else:
+    from io_validation import read_validated_csv
 
+if __package__:
+    from src.io_validation import require_nonempty_file
+else:
+    from io_validation import require_nonempty_file
+
+if __package__:
+    from src.io_validation import write_csv_atomic
+else:
+    from io_validation import write_csv_atomic
 
 ROOT = Path(__file__).resolve().parents[1]
 INPUT_CSV = ROOT / "outputs" / "trajectories" / "tracks.csv"
