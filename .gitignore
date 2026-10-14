@@ -3,5 +3,6 @@ __pycache__/
 *.py[cod]
 data/
 outputs/
+external/TrackEval/
 *.pt
 .env
