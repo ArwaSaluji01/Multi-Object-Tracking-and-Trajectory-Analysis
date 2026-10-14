@@ -1,5 +1,6 @@
-
+import configparser
 import csv
+import logging
 import shutil
 import subprocess
 import sys
@@ -7,6 +8,11 @@ from pathlib import Path
 
 import cv2
 from ultralytics import YOLO
+
+try:
+    from src.pipeline_utils import atomic_output_path
+except ModuleNotFoundError:
+    from pipeline_utils import atomic_output_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +33,9 @@ PREDICTIONS = TRACKER_ROOT / f"{SEQUENCE}.txt"
 OUTPUT_DIR = ROOT / "outputs" / "benchmark"
 
 MODEL_NAME = "yolo11n.pt"
-DEVICE = "cpu"  # Safe default while your cooling fan is broken.
+DEVICE = "cpu"
+
+logger = logging.getLogger(__name__)
 
 
 def prepare_evaluation_data():
@@ -37,7 +45,47 @@ def prepare_evaluation_data():
 
     for path in (images_dir, gt_file, seqinfo):
         if not path.exists():
-            raise FileNotFoundError(f"Required dataset file missing: {path}")
+            raise FileNotFoundError(
+                f"Required dataset file missing: {path}"
+            )
+
+    config = configparser.ConfigParser()
+    if not config.read(seqinfo, encoding="utf-8"):
+        raise RuntimeError(f"Could not read sequence metadata: {seqinfo}")
+
+    try:
+        expected_frames = config.getint("Sequence", "seqLength")
+    except (configparser.Error, ValueError) as exc:
+        raise RuntimeError(
+            f"Missing or invalid Sequence.seqLength in {seqinfo}"
+        ) from exc
+
+    images = sorted(
+        images_dir.glob("*.jpg"),
+        key=lambda path: int(path.stem) if path.stem.isdigit() else -1,
+    )
+
+    if not images:
+        raise RuntimeError(f"No JPG frames found in {images_dir}")
+
+    frame_numbers = [
+        int(path.stem) for path in images if path.stem.isdigit()
+    ]
+
+    if len(frame_numbers) != len(images):
+        raise RuntimeError(
+            f"Non-numeric frame filename found in {images_dir}"
+        )
+
+    expected_numbers = list(range(1, expected_frames + 1))
+
+    if frame_numbers != expected_numbers:
+        raise RuntimeError(
+            f"Frame sequence mismatch: metadata expects frames "
+            f"1–{expected_frames}, but found {len(frame_numbers)} JPGs "
+            f"with contiguous numbering: "
+            f"{frame_numbers == expected_numbers}"
+        )
 
     GT_SEQUENCE.mkdir(parents=True, exist_ok=True)
     (GT_SEQUENCE / "gt").mkdir(exist_ok=True)
@@ -52,14 +100,9 @@ def prepare_evaluation_data():
         encoding="utf-8",
     )
 
-    images = sorted(
-        images_dir.glob("*.jpg"),
-        key=lambda path: int(path.stem),
+    logger.info(
+        "Prepared sequence %s: %d frames", SEQUENCE, len(images)
     )
-
-    if not images:
-        raise RuntimeError(f"No JPG frames found in {images_dir}")
-
     return images
 
 
@@ -69,73 +112,86 @@ def export_predictions(images):
     model = YOLO(MODEL_NAME)
     total_detections = 0
 
-    with PREDICTIONS.open(
-        "w", newline="", encoding="utf-8"
-    ) as file:
-        writer = csv.writer(file)
+    try:
+        with atomic_output_path(PREDICTIONS) as temporary_predictions:
+            with temporary_predictions.open(
+                "w", newline="", encoding="utf-8"
+            ) as file:
+                writer = csv.writer(file)
 
-        for frame_number, image_path in enumerate(images, start=1):
-            frame = cv2.imread(str(image_path))
+                for frame_number, image_path in enumerate(images, start=1):
+                    frame = cv2.imread(str(image_path))
 
-            if frame is None:
-                raise RuntimeError(f"Could not read {image_path}")
+                    if frame is None:
+                        raise RuntimeError(
+                            f"Could not read frame {frame_number}: "
+                            f"{image_path}"
+                        )
 
-            result = model.track(
-                frame,
-                persist=True,
-                tracker="bytetrack.yaml",
-                classes=[0],  # COCO class 0 = person
-                device=DEVICE,
-                verbose=False,
-            )[0]
+                    result = model.track(
+                        frame,
+                        persist=True,
+                        tracker="bytetrack.yaml",
+                        classes=[0],
+                        device=DEVICE,
+                        verbose=False,
+                    )[0]
 
-            boxes = result.boxes
+                    boxes = result.boxes
 
-            if boxes is None or boxes.id is None:
-                continue
+                    if boxes is not None and boxes.id is not None:
+                        coordinates = boxes.xyxy.cpu().numpy()
+                        track_ids = boxes.id.int().cpu().tolist()
+                        confidences = boxes.conf.cpu().tolist()
 
-            coordinates = boxes.xyxy.cpu().numpy()
-            track_ids = boxes.id.int().cpu().tolist()
-            confidences = boxes.conf.cpu().tolist()
+                        for box, track_id, confidence in zip(
+                            coordinates, track_ids, confidences
+                        ):
+                            x1, y1, x2, y2 = box
 
-            for box, track_id, confidence in zip(
-                coordinates, track_ids, confidences
-            ):
-                x1, y1, x2, y2 = box
-                width = x2 - x1
-                height = y2 - y1
+                            writer.writerow([
+                                frame_number,
+                                track_id,
+                                round(float(x1), 2),
+                                round(float(y1), 2),
+                                round(float(x2 - x1), 2),
+                                round(float(y2 - y1), 2),
+                                round(float(confidence), 4),
+                                -1, -1, -1,
+                            ])
+                            total_detections += 1
 
-                writer.writerow([
-                    frame_number,
-                    track_id,
-                    round(float(x1), 2),
-                    round(float(y1), 2),
-                    round(float(width), 2),
-                    round(float(height), 2),
-                    round(float(confidence), 4),
-                    -1, -1, -1,
-                ])
+                    if frame_number % 100 == 0:
+                        logger.info(
+                            "MOT17: processed %d/%d frames",
+                            frame_number,
+                            len(images),
+                        )
 
-                total_detections += 1
+    except Exception:
+        logger.exception("Failed to export MOT17 predictions.")
+        raise
 
-            if frame_number % 100 == 0:
-                print(f"Processed {frame_number}/{len(images)} frames")
-
-    print(f"Prediction file: {PREDICTIONS}")
-    print(f"Person detections with track IDs: {total_detections}")
+    logger.info("Prediction file: %s", PREDICTIONS)
+    logger.info("Person detections with track IDs: %d", total_detections)
 
 
 def run_trackeval():
     script = TRACK_EVAL / "scripts" / "run_mot_challenge.py"
 
-    if not script.exists():
+    if not script.is_file():
         raise FileNotFoundError(
-            "TrackEval not found. Clone it into external/TrackEval first."
+            f"TrackEval script not found: {script}. "
+            "Ensure external/TrackEval is available."
+        )
+
+    if not PREDICTIONS.is_file():
+        raise FileNotFoundError(
+            f"Prediction file not found: {PREDICTIONS}"
         )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    
     command = [
         sys.executable,
         str(script),
@@ -154,18 +210,41 @@ def run_trackeval():
         "--DO_PREPROC", "True",
     ]
 
-    subprocess.run(command, cwd=TRACK_EVAL, check=True)
+    logger.info("Running TrackEval for %s", SEQUENCE)
+
+    try:
+        subprocess.run(
+            command,
+            cwd=TRACK_EVAL,
+            check=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.error(
+            "TrackEval failed with exit code %s. Command: %s",
+            exc.returncode,
+            exc.cmd,
+        )
+        raise RuntimeError(
+            "TrackEval evaluation failed; see the preceding error output."
+        ) from exc
+
+    logger.info("TrackEval results saved under: %s", OUTPUT_DIR)
 
 
 def main():
     images = prepare_evaluation_data()
-    print(f"Sequence: {SEQUENCE}; frames: {len(images)}")
+    logger.info("Sequence: %s; frames: %d", SEQUENCE, len(images))
 
     export_predictions(images)
     run_trackeval()
 
-    print(f"Evaluation complete. Results saved under: {OUTPUT_DIR}")
+    logger.info("MOT17 evaluation completed successfully.")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
     main()

@@ -1,11 +1,17 @@
-
 import csv
+import logging
+import math
 import time
 from collections import defaultdict, deque
 from pathlib import Path
 
 import cv2
 from ultralytics import YOLO
+
+try:
+    from src.pipeline_utils import atomic_output_path
+except ModuleNotFoundError:
+    from pipeline_utils import atomic_output_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,129 +23,160 @@ MODEL_NAME = "yolo11n.pt"
 TRACKER = "bytetrack.yaml"
 MAX_TRAJECTORY_POINTS = 50
 
+logger = logging.getLogger(__name__)
 
 def main():
-    if not INPUT_VIDEO.exists():
-        raise FileNotFoundError(f"Video not found: {INPUT_VIDEO}")
+    if not INPUT_VIDEO.is_file():
+        raise FileNotFoundError(f"Input video not found: {INPUT_VIDEO}")
 
-    OUTPUT_VIDEO.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
-
+    logger.info("Loading model: %s", MODEL_NAME)
     model = YOLO(MODEL_NAME)
-    cap = cv2.VideoCapture(str(INPUT_VIDEO))
 
-    if not cap.isOpened():
-        raise RuntimeError("Could not open input video.")
-
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-
-    writer = cv2.VideoWriter(
-        str(OUTPUT_VIDEO),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        source_fps,
-        (width, height),
-    )
-
-    if not writer.isOpened():
-        cap.release()
-        raise RuntimeError("Could not create output video.")
-
-    trajectories = defaultdict(
-        lambda: deque(maxlen=MAX_TRAJECTORY_POINTS)
-    )
     frame_number = 0
     start_time = time.perf_counter()
 
     try:
-        with OUTPUT_CSV.open(
-            "w", newline="", encoding="utf-8"
-        ) as csv_file:
-            csv_writer = csv.writer(csv_file)
-            csv_writer.writerow([
-                "frame", "track_id", "class_name", "confidence",
-                "x1", "y1", "x2", "y2", "center_x", "center_y"
-            ])
+        with atomic_output_path(OUTPUT_VIDEO) as temporary_video, \
+             atomic_output_path(OUTPUT_CSV) as temporary_csv:
 
-            while True:
-                success, frame = cap.read()
-                if not success:
-                    break
+            cap = None
+            writer = None
 
-                frame_number += 1
+            try:
+                cap = cv2.VideoCapture(str(INPUT_VIDEO))
 
-                result = model.track(
-                    frame,
-                    persist=True,
-                    tracker=TRACKER,
-                    verbose=False,
-                )[0]
+                if not cap.isOpened():
+                    raise RuntimeError(
+                        f"Could not open input video: {INPUT_VIDEO}"
+                    )
 
-                annotated = result.plot()
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                source_fps = cap.get(cv2.CAP_PROP_FPS)
 
-                if result.boxes is not None and result.boxes.id is not None:
-                    boxes = result.boxes.xyxy.cpu().numpy()
-                    ids = result.boxes.id.int().cpu().tolist()
-                    classes = result.boxes.cls.int().cpu().tolist()
-                    confidences = result.boxes.conf.cpu().tolist()
+                if width <= 0 or height <= 0:
+                    raise RuntimeError(
+                        f"Invalid video dimensions: {width}x{height}"
+                    )
 
-                    for box, track_id, cls, confidence in zip(
-                        boxes, ids, classes, confidences
-                    ):
-                        x1, y1, x2, y2 = map(int, box)
-                        center_x = (x1 + x2) // 2
-                        center_y = (y1 + y2) // 2
+                if not math.isfinite(source_fps) or source_fps <= 0:
+                    logger.warning("Invalid source FPS; using 30 FPS.")
+                    source_fps = 30.0
 
-                        trajectories[track_id].append(
-                            (center_x, center_y)
-                        )
+                writer = cv2.VideoWriter(
+                    str(temporary_video),
+                    cv2.VideoWriter_fourcc(*"mp4v"),
+                    source_fps,
+                    (width, height),
+                )
 
-                        csv_writer.writerow([
-                            frame_number,
-                            track_id,
-                            model.names[cls],
-                            round(confidence, 4),
-                            x1, y1, x2, y2,
-                            center_x, center_y,
-                        ])
+                if not writer.isOpened():
+                    raise RuntimeError(
+                        f"Could not initialize writer: {temporary_video}"
+                    )
 
-                for points in trajectories.values():
-                    for i in range(1, len(points)):
-                        cv2.line(
+                trajectories = defaultdict(
+                    lambda: deque(maxlen=MAX_TRAJECTORY_POINTS)
+                )
+
+                with temporary_csv.open(
+                    "w", newline="", encoding="utf-8"
+                ) as csv_file:
+                    csv_writer = csv.writer(csv_file)
+                    csv_writer.writerow([
+                        "frame", "track_id", "class_name", "confidence",
+                        "x1", "y1", "x2", "y2", "center_x", "center_y",
+                    ])
+
+                    while True:
+                        success, frame = cap.read()
+                        if not success:
+                            break
+
+                        frame_number += 1
+
+                        result = model.track(
+                            frame,
+                            persist=True,
+                            tracker=TRACKER,
+                            verbose=False,
+                        )[0]
+
+                        annotated = result.plot()
+                        boxes = result.boxes
+
+                        if boxes is not None and boxes.id is not None:
+                            coordinates = boxes.xyxy.cpu().numpy()
+                            ids = boxes.id.int().cpu().tolist()
+                            classes = boxes.cls.int().cpu().tolist()
+                            scores = boxes.conf.cpu().tolist()
+
+                            for box, track_id, cls, score in zip(
+                                coordinates, ids, classes, scores
+                            ):
+                                x1, y1, x2, y2 = map(int, box)
+                                cx = (x1 + x2) // 2
+                                cy = (y1 + y2) // 2
+
+                                trajectories[track_id].append((cx, cy))
+
+                                csv_writer.writerow([
+                                    frame_number, track_id, model.names[cls],
+                                    round(float(score), 4),
+                                    x1, y1, x2, y2, cx, cy,
+                                ])
+
+                        for points in trajectories.values():
+                            for i in range(1, len(points)):
+                                cv2.line(
+                                    annotated,
+                                    points[i - 1],
+                                    points[i],
+                                    (0, 255, 255),
+                                    2,
+                                )
+
+                        elapsed = time.perf_counter() - start_time
+                        fps = frame_number / max(elapsed, 1e-9)
+
+                        cv2.putText(
                             annotated,
-                            points[i - 1],
-                            points[i],
-                            (0, 255, 255),
+                            f"Frame: {frame_number} | FPS: {fps:.1f}",
+                            (15, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 255, 0),
                             2,
                         )
 
-                elapsed = time.perf_counter() - start_time
-                processing_fps = frame_number / max(elapsed, 1e-9)
+                        writer.write(annotated)
 
-                cv2.putText(
-                    annotated,
-                    f"Frame: {frame_number} | FPS: {processing_fps:.1f}",
-                    (15, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0),
-                    2,
-                )
+                        if frame_number % 100 == 0:
+                            logger.info("Processed %d frames", frame_number)
 
-                writer.write(annotated)
+                if frame_number == 0:
+                    raise RuntimeError(
+                        f"No frames could be read from {INPUT_VIDEO}"
+                    )
 
-                if frame_number % 100 == 0:
-                    print(f"Processed {frame_number} frames")
+            finally:
+                if cap is not None:
+                    cap.release()
+                if writer is not None:
+                    writer.release()
 
-    finally:
-        cap.release()
-        writer.release()
+    except Exception:
+        logger.exception("Video tracking failed.")
+        raise
 
-    print(f"Video saved: {OUTPUT_VIDEO}")
-    print(f"Tracking data saved: {OUTPUT_CSV}")
-    print(f"Frames processed: {frame_number}")
+    logger.info("Tracking completed: %d frames", frame_number)
+    logger.info("Tracked video: %s", OUTPUT_VIDEO)
+    logger.info("Tracking CSV: %s", OUTPUT_CSV)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
     main()
